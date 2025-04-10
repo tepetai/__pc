@@ -312,72 +312,72 @@
                     let zipCode = '';
                     let hasAtSymbol = false;
                     let isInAddressCell = false;
-                    let isInAddressPart = false;
                     let emptyLinesRemoved = 0;
 
                     // Поиск данных в документе
                     for (let tc of tcElements) {
-                        const textElements = tc.getElementsByTagName('w:t');
-                        let cellContent = [];
+                        const pElements = tc.getElementsByTagName('w:p');
+                        let cellLines = [];
                         
-                        for (let textEl of textElements) {
-                            const text = textEl.textContent.trim();
-                            cellContent.push(text);
+                        // Собираем все строки в ячейке
+                        for (let p of pElements) {
+                            const tElements = p.getElementsByTagName('w:t');
+                            let lineText = '';
                             
-                            if (text.includes('@')) {
-                                hasAtSymbol = true;
+                            for (let t of tElements) {
+                                lineText += t.textContent;
                             }
                             
-                            const zipMatch = text.match(/^(\d{6}),\s/);
-                            if (zipMatch) {
-                                zipCode = zipMatch[1];
-                            }
-                            
-                            if (text.includes('Свердловская')) {
-                                isInAddressCell = true;
-                                address = text;
-                                const addrZipMatch = address.match(/^(\d{6}),\s/);
-                                if (addrZipMatch && !zipCode) {
-                                    zipCode = addrZipMatch[1];
-                                }
-                            }
+                            cellLines.push(lineText.trim());
                         }
                         
-                        if (isInAddressCell) {
-                            // Собираем полный адрес (все строки после ФИО)
-                            let addressStarted = false;
-                            fullAddress = [];
-                            
-                            for (let i = 0; i < cellContent.length; i++) {
-                                const text = cellContent[i];
-                                
-                                if (!addressStarted) {
-                                    // Пропускаем пустые строки и ФИО
-                                    if (text === '' && emptyLinesRemoved < 2) {
-                                        emptyLinesRemoved++;
-                                        continue;
-                                    }
-                                    
-                                    // После двух пустых строк начинается адрес
-                                    if (emptyLinesRemoved >= 2 && text !== '') {
-                                        addressStarted = true;
-                                    }
-                                }
-                                
-                                if (addressStarted && text !== '') {
-                                    fullAddress.push(text);
+                        // Проверяем, содержит ли ячейка адрес (по ключевым словам)
+                        const hasAddress = cellLines.some(line => 
+                            line.includes('Свердловская') || 
+                            line.includes('ул.') || 
+                            line.includes('пр.') || 
+                            line.includes('пер.') ||
+                            /^\d{6},/.test(line)
+                        );
+                        
+                        if (hasAddress) {
+                            // Ищем индекс в первых строках
+                            for (let line of cellLines) {
+                                const zipMatch = line.match(/^(\d{6}),\s/);
+                                if (zipMatch) {
+                                    zipCode = zipMatch[1];
+                                    break;
                                 }
                             }
                             
-                            // Удаляем лишние пустые абзацы в ячейке
-                            const pElements = tc.getElementsByTagName('w:p');
+                            // Определяем начало адреса (после ФИО)
+                            let addressStartIndex = 0;
                             let emptyCount = 0;
                             
-                            for (let i = 0; i < pElements.length && emptyCount < 2; i++) {
-                                const p = pElements[i];
+                            for (let i = 0; i < cellLines.length; i++) {
+                                if (cellLines[i] === '') {
+                                    emptyCount++;
+                                    if (emptyCount >= 2) {
+                                        addressStartIndex = i + 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            // Собираем все строки адреса
+                            fullAddress = [];
+                            for (let i = addressStartIndex; i < cellLines.length; i++) {
+                                if (cellLines[i] !== '') {
+                                    fullAddress.push(cellLines[i]);
+                                }
+                            }
+                            
+                            // Удаляем первые 2 пустых абзаца
+                            let pElementsToRemove = 0;
+                            for (let p of pElements) {
                                 const tElements = p.getElementsByTagName('w:t');
-                                
                                 let isEmpty = true;
+                                
                                 for (let t of tElements) {
                                     if (t.textContent.trim() !== '') {
                                         isEmpty = false;
@@ -385,14 +385,16 @@
                                     }
                                 }
                                 
-                                if (isEmpty) {
+                                if (isEmpty && pElementsToRemove < 2) {
                                     p.parentNode.removeChild(p);
-                                    emptyCount++;
-                                    i--;
+                                    pElementsToRemove++;
                                 }
                             }
-                            
-                            isInAddressCell = false;
+                        }
+                        
+                        // Проверяем на наличие @ в любой ячейке
+                        if (cellLines.some(line => line.includes('@'))) {
+                            hasAtSymbol = true;
                         }
                     }
 
@@ -435,7 +437,7 @@
                     buttonsDiv.style.alignItems = 'center';
                     
                     // Формируем полный адрес для 2ГИС
-                    const fullAddressStr = fullAddress.join(' ');
+                    const fullAddressStr = fullAddress.join(' ').replace(/\s+/g, ' ').trim();
                     const addressFor2gis = (zipCode ? zipCode + ', ' : '') + fullAddressStr;
                     
                     buttonsDiv.innerHTML = `
