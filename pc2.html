@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Обработка Word файлов</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .upload-area.dragover {
+            background-color: #e9ecef;
+            border-color: #666;
+        }
+        .file-block {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .file-info {
+            flex-grow: 1;
+        }
+        .page-count {
+            width: 60px;
+            padding: 5px;
+            margin: 0 10px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 10px;
+            color: #666;
+        }
+        #fileBlocks {
+            margin-top: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        #processBtn {
+            display: none;
+            width: 100%;
+            margin-top: 20px;
+            background-color: #28a745;
+        }
+        .batch-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .batch-buttons button {
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Обработка Word файлов</h1>
+        <div class="upload-area" id="dropZone">
+            <p>Перетащите файлы Word сюда или</p>
+            <input type="file" id="fileInput" accept=".docx" multiple style="display: none">
+            <button onclick="document.getElementById('fileInput').click()">Выберите файлы</button>
+        </div>
+        <div id="fileBlocks"></div>
+        <button id="processBtn" onclick="processAllFiles()">Обработать файлы</button>
+        
+        <div class="batch-buttons" id="batchButtons" style="display: none;">
+            <button onclick="downloadAllAsZip()">Скачать все в ZIP</button>
+            <button onclick="mergeAllToSingleWord()">Объединить в один Word</button>
+        </div>
+        
+        <div class="status" id="status"></div>
+    </div>
+
+    <script>
+        const fileBlocks = document.getElementById('fileBlocks');
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const status = document.getElementById('status');
+        const processBtn = document.getElementById('processBtn');
+        const batchButtons = document.getElementById('batchButtons');
+
+        let files = new Map();
+
+        // Обработчики drag and drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFiles(Array.from(e.dataTransfer.files));
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(Array.from(e.target.files));
+        });
+
+        function handleFiles(fileList) {
+            const wordFiles = fileList.filter(file => file.name.endsWith('.docx'));
+            
+            if (wordFiles.length === 0) {
+                status.textContent = 'Пожалуйста, выберите файлы формата .docx';
+                return;
+            }
+
+            wordFiles.forEach(file => addFileBlock(file));
+            updateProcessButton();
+            status.textContent = `Загружено файлов: ${wordFiles.length}`;
+        }
+
+        function addFileBlock(file) {
+            const fileId = Date.now() + '-' + file.name;
+            const fileBlock = document.createElement('div');
+            fileBlock.className = 'file-block';
+            fileBlock.id = fileId;
+
+            fileBlock.innerHTML = `
+                <div class="file-info">
+                    <div>${file.name}</div>
+                    <div>
+                        <label>Кол-во листов: 
+                            <input type="number" class="page-count" value="3" min="1">
+                        </label>
+                    </div>
+                </div>
+                <button onclick="downloadFile('${fileId}')" style="display: none;">Скачать</button>
+            `;
+
+            fileBlocks.appendChild(fileBlock);
+            files.set(fileId, { file: file, processed: null });
+        }
+
+        function updateProcessButton() {
+            const hasFiles = files.size > 0;
+            processBtn.style.display = hasFiles ? 'block' : 'none';
+            batchButtons.style.display = hasFiles ? 'flex' : 'none';
+        }
+
+        window.downloadFile = async function(fileId) {
+            const fileData = files.get(fileId);
+            if (!fileData?.processed) {
+                status.textContent = 'Файл еще не обработан!';
+                return;
+            }
+
+            try {
+                const blob = await fileData.processed.generateAsync({
+                    type: 'blob',
+                    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                });
+                saveAs(blob, fileData.file.name);
+                status.textContent = 'Файл успешно сохранен!';
+            } catch (error) {
+                status.textContent = 'Ошибка при сохранении файла: ' + error.message;
+                console.error(error);
+            }
+        };
+
+        // Скачать все файлы в ZIP архиве
+        async function downloadAllAsZip() {
+            if (files.size === 0) {
+                status.textContent = 'Нет файлов для скачивания';
+                return;
+            }
+
+            status.textContent = 'Создание ZIP архива...';
+            const zip = new JSZip();
+            
+            try {
+                for (const [fileId, fileData] of files) {
+                    if (fileData.processed) {
+                        const blob = await fileData.processed.generateAsync({
+                            type: 'blob',
+                            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                        });
+                        zip.file(fileData.file.name, blob);
+                    }
+                }
+                
+                const content = await zip.generateAsync({ type: 'blob' });
+                saveAs(content, 'processed_files.zip');
+                status.textContent = 'ZIP архив успешно создан!';
+            } catch (error) {
+                status.textContent = 'Ошибка при создании ZIP архива: ' + error.message;
+                console.error(error);
+            }
+        }
+
+        // Объединить все файлы в один Word документ
+        async function mergeAllToSingleWord() {
+            if (files.size === 0) {
+                status.textContent = 'Нет файлов для объединения';
+                return;
+            }
+
+            status.textContent = 'Объединение файлов...';
+            
+            try {
+                // Создаем новый ZIP (Word документ)
+                const mergedZip = new JSZip();
+                
+                // Берем первый файл как основу
+                const firstFileId = Array.from(files.keys())[0];
+                const firstFileData = files.get(firstFileId);
+                const firstArrayBuffer = await firstFileData.file.arrayBuffer();
+                const firstZip = await JSZip.loadAsync(firstArrayBuffer);
+                
+                // Копируем всю структуру первого файла
+                firstZip.forEach(async (relativePath, zipEntry) => {
+                    if (!zipEntry.dir) {
+                        const content = await zipEntry.async('uint8array');
+                        mergedZip.file(relativePath, content);
+                    }
+                });
+                
+                // Получаем содержимое document.xml первого файла
+                let mergedDocumentXml = await firstZip.file('word/document.xml').async('text');
+                
+                // Обрабатываем остальные файлы
+                let isFirst = true;
+                for (const [fileId, fileData] of files) {
+                    if (isFirst) {
+                        isFirst = false;
+                        continue;
+                    }
+                    
+                    const arrayBuffer = await fileData.file.arrayBuffer();
+                    const zip = await JSZip.loadAsync(arrayBuffer);
+                    let documentXml = await zip.file('word/document.xml').async('text');
+                    
+                    // Извлекаем содержимое body
+                    const bodyContent = documentXml.match(/<w:body>([\s\S]*?)<\/w:body>/)[1];
+                    mergedDocumentXml = mergedDocumentXml.replace('</w:body>', bodyContent + '</w:body>');
+                }
+                
+                // Сохраняем объединенный document.xml
+                mergedZip.file('word/document.xml', mergedDocumentXml);
+                
+                // Генерируем и скачиваем файл
+                const blob = await mergedZip.generateAsync({
+                    type: 'blob',
+                    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                });
+                
+                saveAs(blob, 'merged_document.docx');
+                status.textContent = 'Файлы успешно объединены!';
+            } catch (error) {
+                status.textContent = 'Ошибка при объединении файлов: ' + error.message;
+                console.error(error);
+            }
+        }
+
+        window.processAllFiles = async function() {
+            status.textContent = 'Обработка файлов...';
+            processBtn.disabled = true;
+
+            for (const [fileId, fileData] of files) {
+                const fileBlock = document.getElementById(fileId);
+                const pageCount = fileBlock.querySelector('.page-count').value;
+                
+                try {
+                    const arrayBuffer = await fileData.file.arrayBuffer();
+                    const zip = await JSZip.loadAsync(arrayBuffer);
+                    let documentXml = await zip.file('word/document.xml').async('text');
+
+                    // Парсинг XML
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(documentXml, 'text/xml');
+                    const tcElements = xmlDoc.getElementsByTagName('w:tc');
+                    let address = '';
+                    let fullAddress = [];
+                    let zipCode = '';
+                    let hasAtSymbol = false;
+                    let isInAddressCell = false;
+                    let isInAddressPart = false;
+                    let emptyLinesRemoved = 0;
+
+                    // Поиск данных в документе
+                    for (let tc of tcElements) {
+                        const textElements = tc.getElementsByTagName('w:t');
+                        let cellContent = [];
+                        
+                        for (let textEl of textElements) {
+                            const text = textEl.textContent.trim();
+                            cellContent.push(text);
+                            
+                            if (text.includes('@')) {
+                                hasAtSymbol = true;
+                            }
+                            
+                            const zipMatch = text.match(/^(\d{6}),\s/);
+                            if (zipMatch) {
+                                zipCode = zipMatch[1];
+                            }
+                            
+                            if (text.includes('Свердловская')) {
+                                isInAddressCell = true;
+                                address = text;
+                                const addrZipMatch = address.match(/^(\d{6}),\s/);
+                                if (addrZipMatch && !zipCode) {
+                                    zipCode = addrZipMatch[1];
+                                }
+                            }
+                        }
+                        
+                        if (isInAddressCell) {
+                            // Собираем полный адрес (все строки после ФИО)
+                            let addressStarted = false;
+                            fullAddress = [];
+                            
+                            for (let i = 0; i < cellContent.length; i++) {
+                                const text = cellContent[i];
+                                
+                                if (!addressStarted) {
+                                    // Пропускаем пустые строки и ФИО
+                                    if (text === '' && emptyLinesRemoved < 2) {
+                                        emptyLinesRemoved++;
+                                        continue;
+                                    }
+                                    
+                                    // После двух пустых строк начинается адрес
+                                    if (emptyLinesRemoved >= 2 && text !== '') {
+                                        addressStarted = true;
+                                    }
+                                }
+                                
+                                if (addressStarted && text !== '') {
+                                    fullAddress.push(text);
+                                }
+                            }
+                            
+                            // Удаляем лишние пустые абзацы в ячейке
+                            const pElements = tc.getElementsByTagName('w:p');
+                            let emptyCount = 0;
+                            
+                            for (let i = 0; i < pElements.length && emptyCount < 2; i++) {
+                                const p = pElements[i];
+                                const tElements = p.getElementsByTagName('w:t');
+                                
+                                let isEmpty = true;
+                                for (let t of tElements) {
+                                    if (t.textContent.trim() !== '') {
+                                        isEmpty = false;
+                                        break;
+                                    }
+                                }
+                                
+                                if (isEmpty) {
+                                    p.parentNode.removeChild(p);
+                                    emptyCount++;
+                                    i--;
+                                }
+                            }
+                            
+                            isInAddressCell = false;
+                        }
+                    }
+
+                    // Сериализация XML
+                    const serializer = new XMLSerializer();
+                    documentXml = serializer.serializeToString(xmlDoc);
+
+                    // Базовые замены
+                    documentXml = documentXml
+                        .replace(/ДРУиУЭ/g, '')
+                        .replace(/ экз /g, ' экз. ')
+                        .replace(/ на 3 л\./g, ` на ${pageCount} л.`);
+
+                    zip.file('word/document.xml', documentXml);
+                    files.get(fileId).processed = zip;
+                    
+                    // Создание элементов интерфейса
+                    const controlsDiv = document.createElement('div');
+                    controlsDiv.style.display = 'flex';
+                    controlsDiv.style.gap = '10px';
+                    controlsDiv.style.alignItems = 'center';
+                    
+                    const zipInput = document.createElement('input');
+                    zipInput.type = 'text';
+                    zipInput.placeholder = 'Индекс (6 цифр)';
+                    zipInput.value = zipCode || '';
+                    zipInput.style.width = '100px';
+                    zipInput.pattern = '\\d{6}';
+                    zipInput.title = 'Введите 6 цифр индекса';
+                    
+                    zipInput.addEventListener('change', function() {
+                        if (this.value && /^\d{6}$/.test(this.value)) {
+                            updateAddressWithZip(fileId, this.value);
+                        }
+                    });
+                    
+                    const buttonsDiv = document.createElement('div');
+                    buttonsDiv.style.display = 'flex';
+                    buttonsDiv.style.gap = '10px';
+                    buttonsDiv.style.alignItems = 'center';
+                    
+                    // Формируем полный адрес для 2ГИС
+                    const fullAddressStr = fullAddress.join(' ');
+                    const addressFor2gis = (zipCode ? zipCode + ', ' : '') + fullAddressStr;
+                    
+                    buttonsDiv.innerHTML = `
+                        <button onclick="downloadFile('${fileId}')">Скачать</button>
+                        ${fullAddress.length > 0 ? `<button onclick="window.open('https://2gis.ru/search/${encodeURIComponent(addressFor2gis)}')">2ГИС</button>` : ''}
+                        ${hasAtSymbol ? '<strong style="color: red; font-size: 1.2em;">@</strong>' : ''}
+                    `;
+                    
+                    controlsDiv.appendChild(zipInput);
+                    controlsDiv.appendChild(buttonsDiv);
+                    
+                    fileBlock.querySelector('button')?.remove();
+                    fileBlock.appendChild(controlsDiv);
+                    
+                } catch (error) {
+                    console.error('Ошибка при обработке файла:', error);
+                    status.textContent = `Ошибка при обработке файла: ${fileData.file.name}`;
+                }
+            }
+
+            status.textContent = 'Обработка завершена';
+            processBtn.disabled = false;
+        };
+
+        async function updateAddressWithZip(fileId, newZip) {
+            const fileData = files.get(fileId);
+            if (!fileData?.processed) return;
+
+            try {
+                let documentXml = await fileData.processed.file('word/document.xml').async('text');
+                documentXml = documentXml.replace(
+                    /(<w:t>)(\d{6},\s)?([^<]*Свердловская[^<]*)(<\/w:t>)/g,
+                    `$1${newZip}, $3$4`
+                );
+                fileData.processed.file('word/document.xml', documentXml);
+                status.textContent = 'Индекс обновлен!';
+            } catch (error) {
+                console.error('Ошибка при обновлении индекса:', error);
+                status.textContent = 'Ошибка при обновлении индекса';
+            }
+        }
+    </script>
+</body>
+</html>
