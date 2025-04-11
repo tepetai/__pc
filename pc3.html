@@ -377,20 +377,114 @@ for (let p of pElements) {
     if (emptyParagraphsRemoved >= 2) break;
     
     const tElements = p.getElementsByTagName('w:t');
-    let hasContent = false;
-    
-    for (let t of tElements) {
-        if (t.textContent.trim() !== '') {
-            hasContent = true;
-            break;
-        }
-    }
-    
-    if (!hasContent) {
-        p.parentNode.removeChild(p);
-        emptyParagraphsRemoved++;
-    }
-}
+window.processAllFiles = async function() {
+    status.textContent = 'Обработка файлов...';
+    processBtn.disabled = true;
+
+    for (const [fileId, fileData] of files) {
+        const fileBlock = document.getElementById(fileId);
+        const pageCount = fileBlock.querySelector('.page-count').value;
+        
+        try {
+            const arrayBuffer = await fileData.file.arrayBuffer();
+            const zip = await JSZip.loadAsync(arrayBuffer);
+            let documentXml = await zip.file('word/document.xml').async('text');
+
+            // Парсинг XML
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(documentXml, 'text/xml');
+            const tcElements = xmlDoc.getElementsByTagName('w:tc');
+            let address = '';
+            let fullAddress = [];
+            let zipCode = '';
+            let hasAtSymbol = false;
+            let isInAddressCell = false;
+
+            // Поиск данных в документе
+            for (let tc of tcElements) {
+                const pElements = tc.getElementsByTagName('w:p');
+                let cellLines = [];
+                
+                // Собираем все строки в ячейке
+                for (let p of pElements) {
+                    const tElements = p.getElementsByTagName('w:t');
+                    let lineText = '';
+                    
+                    for (let t of tElements) {
+                        lineText += t.textContent;
+                    }
+                    
+                    cellLines.push(lineText.trim());
+                }
+                
+                // Проверяем, содержит ли ячейка адрес
+                const hasAddress = cellLines.some(line => 
+                    line.includes('Свердловская') || 
+                    line.includes('ул.') || 
+                    line.includes('пр.') || 
+                    line.includes('пер.') ||
+                    /^\d{6},/.test(line)
+                );
+                
+                if (hasAddress) {
+                    // Ищем индекс в первых строках
+                    for (let line of cellLines) {
+                        const zipMatch = line.match(/^(\d{6}),\s/);
+                        if (zipMatch) {
+                            zipCode = zipMatch[1];
+                            break;
+                        }
+                    }
+                    
+                    // Определяем начало адреса (после ФИО)
+                    let addressStartIndex = 0;
+                    let emptyCount = 0;
+                    
+                    for (let i = 0; i < cellLines.length; i++) {
+                        if (cellLines[i] === '') {
+                            emptyCount++;
+                            if (emptyCount >= 2) {
+                                addressStartIndex = i + 1;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Собираем все строки адреса
+                    fullAddress = [];
+                    for (let i = addressStartIndex; i < cellLines.length; i++) {
+                        if (cellLines[i] !== '') {
+                            fullAddress.push(cellLines[i]);
+                        }
+                    }
+                    
+                    // Удаление пустых абзацев (новый улучшенный способ)
+                    let paragraphsToRemove = 2;
+                    let removedCount = 0;
+                    
+                    for (let i = 0; i < pElements.length && removedCount < paragraphsToRemove; i++) {
+                        const p = pElements[i];
+                        const tElements = p.getElementsByTagName('w:t');
+                        let isEmpty = true;
+                        
+                        // Проверяем, содержит ли абзац только пробелы или пуст
+                        for (let t of tElements) {
+                            if (t.textContent.trim() !== '') {
+                                isEmpty = false;
+                                break;
+                            }
+                        }
+                        
+                        // Проверяем наличие других элементов, которые могут делать абзац "видимым"
+                        const hasOtherElements = p.getElementsByTagName('*').length > 0;
+                        
+                        if (isEmpty && !hasOtherElements) {
+                            p.parentNode.removeChild(p);
+                            removedCount++;
+                            // Уменьшаем индекс, так как мы удалили элемент
+                            i--;
+                        }
+                    }
                 }
                 
                 // Проверяем на наличие @ в любой ячейке
