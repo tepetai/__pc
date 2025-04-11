@@ -371,25 +371,26 @@ window.processAllFiles = async function() {
                     }
                     
                     // Удаление пустых абзацев (Вариант 1)
-                    let emptyParagraphsRemoved = 0;
-                    for (let p of pElements) {
-                        if (emptyParagraphsRemoved >= 2) break;
-                        
-                        const tElements = p.getElementsByTagName('w:t');
-                        let hasContent = false;
-                        
-                        for (let t of tElements) {
-                            if (t.textContent.trim() !== '') {
-                                hasContent = true;
-                                break;
-                            }
-                        }
-                        
-                        if (!hasContent) {
-                            p.parentNode.removeChild(p);
-                            emptyParagraphsRemoved++;
-                        }
-                    }
+                    // Внутри функции processAllFiles:
+let emptyParagraphsRemoved = 0;
+for (let p of pElements) {
+    if (emptyParagraphsRemoved >= 2) break;
+    
+    const tElements = p.getElementsByTagName('w:t');
+    let hasContent = false;
+    
+    for (let t of tElements) {
+        if (t.textContent.trim() !== '') {
+            hasContent = true;
+            break;
+        }
+    }
+    
+    if (!hasContent) {
+        p.parentNode.removeChild(p);
+        emptyParagraphsRemoved++;
+    }
+}
                 }
                 
                 // Проверяем на наличие @ в любой ячейке
